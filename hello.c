@@ -1,6 +1,8 @@
 int global1 = 0;
 int gloabl2 = 0;
 
+#define foo bar
+
 struct st1 { int field1; long field2; };
 
 int func1(char arg1, unsigned long arg2)
