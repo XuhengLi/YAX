@@ -85,10 +85,21 @@ parseCType gl (cType:xs) declList =
 parseDecl gl (CDecl cTypes declrList info) =
     parseCType gl cTypes declrList
 
+parseExpr gl ll expr id_type =
+    case expr of
+        CCall expr _ _ -> parseExpr gl ll expr IdCall
+        CVar ident _ -> (identToEntry ident id_type) : gl
+        _ -> gl
+
+parseStmt gl ll stmt =
+    case stmt of
+        CExpr (Just expr) _ -> parseExpr gl ll expr IdRef
+        _ -> gl
+
 -- C code compound, gl is global symbol list, ll is local symbol list
 parseCompound gl ll (CCompound labels (blockItem:xs) _) =
     case blockItem of
-        CBlockStmt stmt -> gl -- placeholder
+        CBlockStmt stmt -> parseStmt gl ll stmt -- placeholder
         CBlockDecl (_) -> gl -- placeholder
         CNestedFunDef (_) -> gl -- GNU C nested function is not supported
 
