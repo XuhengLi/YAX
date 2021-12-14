@@ -8,6 +8,8 @@ import Language.C.Syntax.AST
 import Language.C.Data.Ident
 import Language.C.System.GCC
 
+import System.Exit
+
 {-
 parseC :: InputStream -> Position -> Either ParseError CTranslUnit
 parseC input initialPosition =
@@ -26,11 +28,12 @@ readExt = do
     print $ parseExtDecl source $ initPos "./ext.c"
 -}
 
-data EntryType = IdDecl | IdRef | IdCall
+data EntryType = IdDecl | IdRef | IdCall | Label
 instance Show EntryType where
     show IdDecl = "IdDecl"
     show IdRef = "IdRef"
     show IdCall = "IdCall"
+    show Label = "Label"
 
 -- | IdEntry stores the information about a symbol:
 -- (symbolName, filePath, line)
@@ -69,26 +72,43 @@ parseCSU gl (CStruct _ mident mdecl _ _) =
         parseStructDeclList gl' (x:xs) =
             let dl = (parseDecl gl' x) in parseStructDeclList dl xs
 
-parseCTypeList gl [] _ = gl
-parseCTypeList gl (cType:xs) declList =
+parseCType gl [] _ = gl
+parseCType gl (cType:xs) declList =
     case cType of
         -- struct or union
         CTypeSpec (CSUType (csu) _) ->
-            let cl = (parseCSU gl csu) in parseCTypeList cl xs declList
+            let dl = (parseCSU gl csu) in parseCType dl xs declList
         -- other types
         _ ->
-            let dl = (parseDeclList gl declList) in parseCTypeList dl xs declList
+            parseDeclList gl declList
 
 --parseDecl :: CDeclaration a -> IdEntry
-parseDecl gl (CDecl cType declList info) =
-    parseCTypeList gl cType declList
+parseDecl gl (CDecl cTypes [] info) = gl -- void function arguments
+parseDecl gl (CDecl cTypes declrList info) =
+    parseCType gl cTypes declrList
+
+-- C code compound, gl is global symbol list, ll is local symbol list
+parseCompound gl ll (CCompound labels (blockItem:xs) _) =
+    case blockItem of
+        CBlockStmt stmt -> gl -- placeholder
+        CBlockDecl (_) -> gl -- placeholder
+        CNestedFunDef (_) -> gl -- GNU C nested function is not supported
+
+parseFunDeclr gl (CFunDeclr (Left _) _ _ ) = gl -- old-style function declaration is not supported
+parseFunDeclr gl (CFunDeclr (Right (cDecls, _)) _ _) =
+    forEachCDecl gl cDecls
+    where
+    forEachCDecl rl [] = rl
+    forEachCDecl rl (cDecl:xs) = let new_rl = (parseDecl rl cDecl) in forEachCDecl new_rl xs
 
 -- Function definitions
 --parseDef
-parseDef gl (CFunDef cType cDeclr _ cStmt _) =
+parseDef gl (CFunDef cType cDeclr _ cCompound _) =
     case cDeclr of
-        (CDeclr (Just ident) _ _ _ _) ->
-            (identToEntry ident IdDecl) : gl
+        (CDeclr (Just ident) [cFunDeclr] _ _ _) ->
+            let gl' = (identToEntry ident IdDecl) : gl in
+            let ll = parseFunDeclr gl' cFunDeclr in
+            parseCompound gl' ll cCompound
 
 --parseTranslUnit ::
 parseTranslUnit gl [] = gl
