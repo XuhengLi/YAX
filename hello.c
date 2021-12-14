@@ -1,4 +1,4 @@
-int global1 = 0;
+int global0 = 0;
 int gloabl2 = 0;
 
 struct st1 { int field1; long field2; };

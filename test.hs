@@ -76,14 +76,12 @@ parseCType gl [] _ = gl
 parseCType gl (cType:xs) declList =
     case cType of
         -- struct or union
-        CTypeSpec (CSUType (csu) _) ->
-            let dl = (parseCSU gl csu) in parseCType dl xs declList
+        CTypeSpec (CSUType (csu) _) -> parseCSU gl csu
         -- other types
-        _ ->
-            parseDeclList gl declList
+        _ -> parseDeclList gl declList
 
 --parseDecl :: CDeclaration a -> IdEntry
-parseDecl gl (CDecl cTypes [] info) = gl -- void function arguments
+-- parseDecl gl (CDecl cTypes [] info) = gl -- void function arguments
 parseDecl gl (CDecl cTypes declrList info) =
     parseCType gl cTypes declrList
 
