@@ -27,5 +27,5 @@ int func2(char arg3, unsigned long arg4)
 
 void func3(void)
 {
-	func2(1, 2);
+	func2(foo, 2);
 }

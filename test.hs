@@ -52,6 +52,13 @@ identToEntry ident entry_type =
     let id_col = posColumn $ id_pos in
     (id_name, id_file, id_row, id_col, entry_type)
 
+-- Just use linear search as the size of the local list should be handy
+inLocalList [] id_name = False
+inLocalList ((e_name, _, _, _, _):xs) id_name =
+    if e_name == id_name
+        then True
+        else inLocalList xs id_name
+
 --parseDeclList :: [a] -> [b]
 parseDeclList gl [] = gl
 parseDeclList gl ((cDeclr, cInit, cExp):xs) =
@@ -85,10 +92,22 @@ parseCType gl (cType:xs) declList =
 parseDecl gl (CDecl cTypes declrList info) =
     parseCType gl cTypes declrList
 
+parseExprList gl ll [] _ = gl
+parseExprList gl ll (expr:xs) id_type =
+    let gl' = parseExpr gl ll expr id_type in
+    parseExprList gl' ll xs id_type
+
 parseExpr gl ll expr id_type =
     case expr of
-        CCall expr _ _ -> parseExpr gl ll expr IdCall
-        CVar ident _ -> (identToEntry ident id_type) : gl
+        CCall expr exprList _ ->
+            -- callee must be defined so ll can't be changed
+            let gl' = parseExpr gl ll expr IdCall in
+            parseExprList gl' ll exprList IdRef
+        CVar ident _ ->
+            -- if the ident is a local variable, just discard it
+            if inLocalList ll (identToString ident)
+                then gl
+                else (identToEntry ident id_type) : gl
         _ -> gl
 
 parseStmt gl ll stmt =
@@ -108,7 +127,8 @@ parseFunDeclr gl (CFunDeclr (Right (cDecls, _)) _ _) =
     forEachCDecl gl cDecls
     where
     forEachCDecl rl [] = rl
-    forEachCDecl rl (cDecl:xs) = let new_rl = (parseDecl rl cDecl) in forEachCDecl new_rl xs
+    forEachCDecl rl (cDecl:xs) =
+        let new_rl = (parseDecl rl cDecl) in forEachCDecl new_rl xs
 
 -- Function definitions
 --parseDef
