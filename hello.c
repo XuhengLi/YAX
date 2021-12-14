@@ -25,7 +25,7 @@ int func2(char arg3, unsigned long arg4)
 	return global1;
 }
 
-void func3(void)
+void func3(int arg5)
 {
-	func2(foo, 2);
+	func2(foo, 2, bar, arg5, dead);
 }
