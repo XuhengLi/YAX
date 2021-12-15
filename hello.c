@@ -36,6 +36,8 @@ void func3(int arg5)
 	j = cond1 ? if_true : else_false;
 	j = cond2 ? : only_false;
 	k = st1.fieldk;
+
+test_label:
 	i = st2->fieldi;
 	m = st3()->fieldm;
 	if (cond1)

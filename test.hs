@@ -9,6 +9,7 @@ import Language.C.Data.Ident
 import Language.C.System.GCC
 
 import System.Exit
+import Data.List
 
 {-
 parseC :: InputStream -> Position -> Either ParseError CTranslUnit
@@ -28,12 +29,12 @@ readExt = do
     print $ parseExtDecl source $ initPos "./ext.c"
 -}
 
-data EntryType = IdDecl | IdRef | IdCall | Label
+data EntryType = IdDecl | IdRef | IdCall | IdLabel deriving Eq
 instance Show EntryType where
     show IdDecl = "IdDecl"
     show IdRef = "IdRef"
     show IdCall = "IdCall"
-    show Label = "Label"
+    show IdLabel = "IdLabel"
 
 -- | IdEntry stores the information about a symbol:
 -- (symbolName, filePath, line)
@@ -146,18 +147,26 @@ parseExpr gl ll expr id_type =
                 then gl
                 else (identToEntry ident id_type) : gl
         _ -> gl
-    where
-        parseExpr2 gl ll (expr1, t1) (expr2, t2) =
-            let gl' = parseExpr gl ll expr1 t1 in
-            parseExpr gl' ll expr2 t2
-        parseExpr3 gl ll exprt1 exprt2 (expr3, t3)  =
-            let gl' = parseExpr2 gl ll exprt1 exprt2 in
-            parseExpr gl' ll expr3 t3
 
+parseExpr2 gl ll (expr1, t1) (expr2, t2) =
+    let gl' = parseExpr gl ll expr1 t1 in
+    parseExpr gl' ll expr2 t2
+
+parseExpr3 gl ll exprt1 exprt2 (expr3, t3)  =
+    let gl' = parseExpr2 gl ll exprt1 exprt2 in
+    parseExpr gl' ll expr3 t3
+
+parseStmt :: [IdEntry] -> [IdEntry] -> (CStatement a) -> [IdEntry]
 parseStmt gl ll stmt =
     case stmt of
+        CLabel label stmt _ _ ->
+            let gl' = (identToEntry label IdLabel) : gl in
+            parseStmt gl' ll stmt
         CCase expr stmt _ ->
             let gl' = parseExpr gl ll expr IdRef in
+            parseStmt gl' ll stmt
+        CCases expr1 expr2 stmt _ ->
+            let gl' = parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef) in
             parseStmt gl' ll stmt
         CExpr (Just expr) _ -> parseExpr gl ll expr IdRef
         _ -> gl
@@ -223,6 +232,51 @@ readWithPrep input_file = do
     case ast of
         CTranslUnit l _ -> mapM_ print $ parseTranslUnit [] l
 
+testExpected1 :: [IdEntry]
+testExpected1 = [
+    ("dead","./hello.c",47,27,IdRef),
+    ("bar","./hello.c",47,16,IdRef),
+    ("foo","./hello.c",47,8,IdRef),
+    ("func2","./hello.c",47,2,IdCall),
+    ("fieldm","./hello.c",42,13,IdRef),
+    ("st3","./hello.c",42,6,IdCall),
+    ("m","./hello.c",42,2,IdRef),
+    ("fieldi","./hello.c",41,11,IdRef),
+    ("st2","./hello.c",41,6,IdRef),
+    ("test_label","./hello.c",40,1,IdLabel),
+    ("fieldk","./hello.c",38,10,IdRef),
+    ("st1","./hello.c",38,6,IdRef),
+    ("only_false","./hello.c",37,16,IdRef),
+    ("cond2","./hello.c",37,6,IdRef),
+    ("else_false","./hello.c",36,24,IdRef),
+    ("if_true","./hello.c",36,14,IdRef),
+    ("cond1","./hello.c",36,6,IdRef),
+    ("global2","./hello.c",34,6,IdRef),
+    ("func3","./hello.c",30,6,IdDecl),
+    ("field2","./hello.c",4,31,IdDecl),
+    ("field1","./hello.c",4,18,IdDecl),
+    ("st1","./hello.c",4,8,IdDecl),
+    ("gloabl2","./hello.c",2,5,IdDecl),
+    ("global0","./hello.c",1,5,IdDecl)
+    ]
+
+runTest :: String -> [IdEntry] -> IO ()
+runTest input_file expected = do
+    ast <- errorOnLeftM "Parse Error" $
+        parseCFile (newGCC "gcc") Nothing [""] input_file
+    case ast of
+        CTranslUnit l _ ->
+            let res = parseTranslUnit [] l in
+            if hasDup res
+                then die $ "has duplicate entries"
+                else checkRes res
+    where
+        hasDup xs = length (nub xs) /= length xs
+        checkRes [] = putStrLn "Passed!"
+        checkRes (x:xs) =
+            case find (\e -> e == x) expected of
+                Just _ -> checkRes xs
+                _ -> die $ (show x) ++ " not found"
 
 errorOnLeft :: (Show a) => String -> (Either a b) -> IO b
 errorOnLeft msg = either (error . ((msg ++ ": ")++).show) return
