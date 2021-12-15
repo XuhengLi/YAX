@@ -155,23 +155,57 @@ parseExpr3 gl ll exprt1 exprt2 (expr3, t3)  =
 parseStmt :: [IdEntry] -> [IdEntry] -> (CStatement a) -> [IdEntry]
 parseStmt gl ll stmt = case stmt of
     CLabel label stmt _ _ ->
-       let gl' = (identToEntry label IdLabel) : gl in
-       parseStmt gl' ll stmt
+        let gl' = (identToEntry label IdLabel) : gl in
+        parseStmt gl' ll stmt
     CCase expr stmt _ ->
-       let gl' = parseExpr gl ll expr IdRef in
-       parseStmt gl' ll stmt
+        let gl' = parseExpr gl ll expr IdRef in
+        parseStmt gl' ll stmt
     CCases expr1 expr2 stmt _ ->
-       let gl' = parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef) in
-       parseStmt gl' ll stmt
+        let gl' = parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef) in
+        parseStmt gl' ll stmt
+    CDefault stmt _ ->
+        parseStmt gl ll stmt
     CExpr (Just expr) _ ->
-       parseExpr gl ll expr IdRef
+        parseExpr gl ll expr IdRef
+    CCompound label compoundItems _ ->
+        parseCompound gl ll label compoundItems
+    CIf expr stmt Nothing _ ->
+        let gl' = parseExpr gl ll expr IdRef in
+        parseStmt gl' ll stmt
+    CIf expr stmt1 (Just stmt2) _ ->
+        let gl' = parseExpr gl ll expr IdRef in
+        let gl'' = parseStmt gl' ll stmt1 in
+        parseStmt gl'' ll stmt2
+    CSwitch expr stmt _ ->
+        let gl' = parseExpr gl ll expr IdRef in
+        parseStmt gl' ll stmt
+    CWhile expr stmt _ _ ->
+        let gl' = parseExpr gl ll expr IdRef in
+        parseStmt gl' ll stmt
+    CFor _ _ _ _ _ -> parseCFor stmt
+    CGoto label _ ->
+        (identToEntry label IdLabel) : gl
+    CReturn (Just expr) _ ->
+        parseExpr gl ll expr IdRef
     _ -> gl
+    where
+        mParseExpr gl ll mexpr = case mexpr of
+            Nothing -> Just gl
+            Just expr -> Just (parseExpr gl ll expr IdRef)
+        parseCFor (CFor (Left mexpr1) (mexpr2) (mexpr3) stmt _) =
+             case mParseExpr gl ll mexpr1 >>= \gl1 ->
+                  (mParseExpr gl1 ll) mexpr1 of
+                Nothing -> gl
+                Just gl3 -> parseStmt gl3 ll stmt
+        parseCFor (CFor _ _ _ _ _) = gl
 
 -- dummy local list used to indicate we are in local scope
 dummyll :: [IdEntry]
 dummyll = [("", "", 0, 0, IdDecl)]
 
 -- C code compound, gl is global symbol list, ll is local symbol list
+-- Updates to a local symbol in a compound is discarded when the compound
+-- is parsed
 parseCompound :: [IdEntry] -> [IdEntry] -> [Ident] -> [CCompoundBlockItem a]
     -> [IdEntry]
 parseCompound gl ll labels [] = gl -- end of parsing, ll is discarded
@@ -257,7 +291,10 @@ testExpected1 = [
     ("field1","./hello.c",4,18,IdDecl),
     ("st1","./hello.c",4,8,IdDecl),
     ("gloabl2","./hello.c",2,5,IdDecl),
-    ("global0","./hello.c",1,5,IdDecl)
+    ("global0","./hello.c",1,5,IdDecl),
+    ("cond1","./hello.c",43,6,IdRef),
+    ("global1","./hello.c",44,7,IdRef),
+    ("beef","./hello.c",46,7,IdRef)
     ]
 
 stringDef :: String
