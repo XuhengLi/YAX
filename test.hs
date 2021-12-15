@@ -67,24 +67,22 @@ inLocalList ((e_name, _, _, _, _):xs) id_name =
 parseDeclList :: [IdEntry] -> [IdEntry] -> [(Maybe (CDeclarator a0), b0, c0)] ->
     ([IdEntry], [IdEntry])
 parseDeclList gl ll [] = (gl, ll)
-parseDeclList gl ll ((cDeclr, cInit, cExp):xs) =
-    case cDeclr of
-        Nothing -> (gl, ll)
-        Just (CDeclr (Just ident) _ _ _ _) ->
-            case ll of
-                [] -> let gl' = (identToEntry ident IdDecl) : gl in parseDeclList gl' ll xs
-                _ -> let ll' = (identToEntry ident IdDecl) : ll in parseDeclList gl ll' xs
+parseDeclList gl ll ((cDeclr, cInit, cExp):xs) = case cDeclr of
+    Nothing -> (gl, ll)
+    Just (CDeclr (Just ident) _ _ _ _) ->
+        case ll of
+            [] -> let gl' = (identToEntry ident IdDecl) : gl in parseDeclList gl' ll xs
+            _ -> let ll' = (identToEntry ident IdDecl) : ll in parseDeclList gl ll' xs
 
 parseCSU :: [IdEntry] -> [IdEntry] -> CStructureUnion a -> ([IdEntry], [IdEntry])
-parseCSU gl ll (CStruct _ mident mdecl _ _) =
-    case mident of
-        Just ident ->
-            -- struct variable declarations are always indexed
-            let gl' = ((identToEntry ident IdDecl) : gl) in
-            case mdecl of
-                Just declL -> (parseStructDeclList gl' declL, ll)
-                _ -> (gl', ll)
-        _ -> (gl, ll) -- TODO: this needs to be fixed as anoymous struct can have fields
+parseCSU gl ll (CStruct _ mident mdecl _ _) = case mident of
+    Just ident ->
+        -- struct variable declarations are always indexed
+        let gl' = ((identToEntry ident IdDecl) : gl) in
+        case mdecl of
+            Just declL -> (parseStructDeclList gl' declL, ll)
+            _ -> (gl', ll)
+    _ -> (gl, ll) -- TODO: this needs to be fixed as anoymous struct can have fields
     where
         -- struct fields are always indexed
         parseStructDeclList gl' [] = gl'
@@ -94,16 +92,15 @@ parseCSU gl ll (CStruct _ mident mdecl _ _) =
 parseCType :: [IdEntry] -> [IdEntry] -> [CDeclarationSpecifier a] ->
     [(Maybe (CDeclarator a0), b0, c0)] -> ([IdEntry], [IdEntry])
 parseCType gl ll [] _ = (gl, ll)
-parseCType gl ll (cType:xs) declList =
-    case cType of
-        -- struct or union
-        CTypeSpec (CSUType (csu) _) ->
-            let (gl', ll') = parseCSU gl ll csu in
-            case declList of
-                [] -> (gl', ll')
-                _ -> parseDeclList gl' ll' declList
-        -- other types
-        _ -> parseDeclList gl ll declList
+parseCType gl ll (cType:xs) declList = case cType of
+    -- struct or union
+    CTypeSpec (CSUType (csu) _) ->
+        let (gl', ll') = parseCSU gl ll csu in
+        case declList of
+            [] -> (gl', ll')
+            _ -> parseDeclList gl' ll' declList
+    -- other types
+    _ -> parseDeclList gl ll declList
 
 --parseDecl :: CDeclaration a -> IdEntry
 -- parseDecl gl (CDecl cTypes [] info) = gl -- void function arguments
@@ -118,35 +115,34 @@ parseExprList gl ll (expr:xs) id_type =
     let gl' = parseExpr gl ll expr id_type in
     parseExprList gl' ll xs id_type
 
-parseExpr gl ll expr id_type =
-    case expr of
-        CComma exprList _ -> parseExprList gl ll exprList IdRef
-        CAssign _ expr1 expr2 _ ->
-            parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
-        CCond expr1 Nothing expr2 _ ->
-            parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
-        CCond expr1 (Just expr2) expr3 _ ->
-            parseExpr3 gl ll (expr1, IdRef) (expr2, IdRef) (expr3, IdRef)
-        CBinary _ expr1 expr2 _ ->
-            parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
-        CCast _ expr _ -> parseExpr gl ll expr IdRef
-        CUnary _ expr _ -> parseExpr gl ll expr IdRef
-        CSizeofExpr expr _ -> parseExpr gl ll expr IdRef
-        CIndex expr1 expr2 _ ->
-            parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
-        CCall expr exprList _ ->
-            -- callee must be defined so ll can't be changed
-            let gl' = parseExpr gl ll expr IdCall in
-            parseExprList gl' ll exprList IdRef
-        CMember struct field _ _ -> -- field :: Ident is always indexed
-            let gl' = parseExpr gl ll struct IdRef in
-            (identToEntry field IdRef) : gl'
-        CVar ident _ ->
-            -- if the ident is a local variable, just discard it
-            if inLocalList ll (identToString ident)
-                then gl
-                else (identToEntry ident id_type) : gl
-        _ -> gl
+parseExpr gl ll expr id_type = case expr of
+    CComma exprList _ -> parseExprList gl ll exprList IdRef
+    CAssign _ expr1 expr2 _ ->
+        parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
+    CCond expr1 Nothing expr2 _ ->
+        parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
+    CCond expr1 (Just expr2) expr3 _ ->
+        parseExpr3 gl ll (expr1, IdRef) (expr2, IdRef) (expr3, IdRef)
+    CBinary _ expr1 expr2 _ ->
+        parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
+    CCast _ expr _ -> parseExpr gl ll expr IdRef
+    CUnary _ expr _ -> parseExpr gl ll expr IdRef
+    CSizeofExpr expr _ -> parseExpr gl ll expr IdRef
+    CIndex expr1 expr2 _ ->
+        parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
+    CCall expr exprList _ ->
+        -- callee must be defined so ll can't be changed
+        let gl' = parseExpr gl ll expr IdCall in
+        parseExprList gl' ll exprList IdRef
+    CMember struct field _ _ -> -- field :: Ident is always indexed
+        let gl' = parseExpr gl ll struct IdRef in
+        (identToEntry field IdRef) : gl'
+    CVar ident _ ->
+        -- if the ident is a local variable, just discard it
+        if inLocalList ll (identToString ident)
+            then gl
+            else (identToEntry ident id_type) : gl
+    _ -> gl
 
 parseExpr2 gl ll (expr1, t1) (expr2, t2) =
     let gl' = parseExpr gl ll expr1 t1 in
@@ -157,19 +153,19 @@ parseExpr3 gl ll exprt1 exprt2 (expr3, t3)  =
     parseExpr gl' ll expr3 t3
 
 parseStmt :: [IdEntry] -> [IdEntry] -> (CStatement a) -> [IdEntry]
-parseStmt gl ll stmt =
-    case stmt of
-        CLabel label stmt _ _ ->
-            let gl' = (identToEntry label IdLabel) : gl in
-            parseStmt gl' ll stmt
-        CCase expr stmt _ ->
-            let gl' = parseExpr gl ll expr IdRef in
-            parseStmt gl' ll stmt
-        CCases expr1 expr2 stmt _ ->
-            let gl' = parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef) in
-            parseStmt gl' ll stmt
-        CExpr (Just expr) _ -> parseExpr gl ll expr IdRef
-        _ -> gl
+parseStmt gl ll stmt = case stmt of
+    CLabel label stmt _ _ ->
+       let gl' = (identToEntry label IdLabel) : gl in
+       parseStmt gl' ll stmt
+    CCase expr stmt _ ->
+       let gl' = parseExpr gl ll expr IdRef in
+       parseStmt gl' ll stmt
+    CCases expr1 expr2 stmt _ ->
+       let gl' = parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef) in
+       parseStmt gl' ll stmt
+    CExpr (Just expr) _ ->
+       parseExpr gl ll expr IdRef
+    _ -> gl
 
 -- dummy local list used to indicate we are in local scope
 dummyll :: [IdEntry]
@@ -179,15 +175,14 @@ dummyll = [("", "", 0, 0, IdDecl)]
 parseCompound :: [IdEntry] -> [IdEntry] -> [Ident] -> [CCompoundBlockItem a]
     -> [IdEntry]
 parseCompound gl ll labels [] = gl -- end of parsing, ll is discarded
-parseCompound gl ll labels (blockItem:xs) =
-    case blockItem of
-        CBlockStmt stmt -> -- Stmt won't introduce new symbols
-            let gl' = parseStmt gl ll stmt in
-            parseCompound gl' ll labels xs
-        CBlockDecl decl -> -- TODO: this needs to fix as decl can refer to global symbols
-            let (gl', ll') = parseDecl gl ll decl in
-            parseCompound gl' ll' labels xs
-        CNestedFunDef (_) -> gl -- GNU C nested function is not supported
+parseCompound gl ll labels (blockItem:xs) = case blockItem of
+    CBlockStmt stmt -> -- Stmt won't introduce new symbols
+        let gl' = parseStmt gl ll stmt in
+        parseCompound gl' ll labels xs
+    CBlockDecl decl -> -- TODO: this needs to fix as decl can refer to global symbols
+        let (gl', ll') = parseDecl gl ll decl in
+        parseCompound gl' ll' labels xs
+    CNestedFunDef (_) -> gl -- GNU C nested function is not supported
 
 parseFunDeclr :: [IdEntry] -> (CDerivedDeclarator a) -> [IdEntry]
 parseFunDeclr ll (CFunDeclr (Left _) _ _ ) = ll -- old-style function declaration is not supported
@@ -201,22 +196,20 @@ parseFunDeclr ll (CFunDeclr (Right (cDecls, _)) _ _) =
 
 -- Function definitions
 parseDef :: [IdEntry] -> (CFunctionDef a) -> [IdEntry]
-parseDef gl (CFunDef cType cDeclr _ cCompound _) =
-    case cDeclr of
-        (CDeclr (Just ident) [cFunDeclr] _ _ _) ->
-            let gl' = (identToEntry ident IdDecl) : gl in -- add function name to global list
-            let ll = parseFunDeclr [] cFunDeclr in -- add function arguments to local list
-            case cCompound of
-                (CCompound labels items _) ->
-                    parseCompound gl' ll labels items
+parseDef gl (CFunDef cType cDeclr _ cCompound _) = case cDeclr of
+    (CDeclr (Just ident) [cFunDeclr] _ _ _) ->
+        let gl' = (identToEntry ident IdDecl) : gl in -- add function name to global list
+        let ll = parseFunDeclr [] cFunDeclr in -- add function arguments to local list
+        case cCompound of
+            (CCompound labels items _) ->
+                parseCompound gl' ll labels items
 
 --parseTranslUnit ::
 parseTranslUnit gl [] = gl
-parseTranslUnit gl (x:xs) =
-    case x of
-        CDeclExt decl -> let (dl, _) = (parseDecl gl [] decl) in parseTranslUnit dl xs
-        CFDefExt def -> let dl = parseDef gl def in parseTranslUnit dl xs
-        _ -> gl
+parseTranslUnit gl (x:xs) = case x of
+    CDeclExt decl -> let (dl, _) = (parseDecl gl [] decl) in parseTranslUnit dl xs
+    CFDefExt def -> let dl = parseDef gl def in parseTranslUnit dl xs
+    _ -> gl
 
 readHello f = do
     source <- readInputStream f
@@ -231,6 +224,13 @@ readWithPrep input_file = do
         parseCFile (newGCC "gcc") Nothing [""] input_file
     case ast of
         CTranslUnit l _ -> mapM_ print $ parseTranslUnit [] l
+
+errorOnLeft :: (Show a) => String -> (Either a b) -> IO b
+errorOnLeft msg = either (error . ((msg ++ ": ")++).show) return
+errorOnLeftM :: (Show a) => String -> IO (Either a b) -> IO b
+errorOnLeftM msg action = action >>= errorOnLeft msg
+
+-- Testing facilities
 
 testExpected1 :: [IdEntry]
 testExpected1 = [
@@ -260,6 +260,18 @@ testExpected1 = [
     ("global0","./hello.c",1,5,IdDecl)
     ]
 
+stringDef :: String
+stringDef = "\ESC[0m"
+
+stringRed :: String
+stringRed = "\ESC[31m"
+
+stringGreen :: String
+stringGreen = "\ESC[32m"
+
+stringColor :: String -> String -> String
+stringColor color str = color ++ str ++ stringDef
+
 runTest :: String -> [IdEntry] -> IO ()
 runTest input_file expected = do
     ast <- errorOnLeftM "Parse Error" $
@@ -267,18 +279,19 @@ runTest input_file expected = do
     case ast of
         CTranslUnit l _ ->
             let res = parseTranslUnit [] l in
-            if hasDup res
+            if hasDup res && length res == length expected
                 then die $ "has duplicate entries"
                 else checkRes res
     where
         hasDup xs = length (nub xs) /= length xs
-        checkRes [] = putStrLn "Passed!"
+        checkRes [] = putStrLn $ stringColor stringGreen "Passed!"
         checkRes (x:xs) =
             case find (\e -> e == x) expected of
                 Just _ -> checkRes xs
-                _ -> die $ (show x) ++ " not found"
+                _ -> do
+                    putStrLn $ stringColor
+                                stringRed
+                                ((show x) ++ " not found in expected")
+                    checkRes xs
 
-errorOnLeft :: (Show a) => String -> (Either a b) -> IO b
-errorOnLeft msg = either (error . ((msg ++ ": ")++).show) return
-errorOnLeftM :: (Show a) => String -> IO (Either a b) -> IO b
-errorOnLeftM msg action = action >>= errorOnLeft msg
+
