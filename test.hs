@@ -55,6 +55,8 @@ identToEntry ident entry_type =
 
 -- Just use linear search as the size of the local list should be handy
 inLocalList :: [IdEntry] -> String -> Bool
+inLocalList _ "true" = True
+inLocalList _ "false" = True
 inLocalList [] id_name = False
 inLocalList ((e_name, _, _, _, _):xs) id_name =
     if e_name == id_name
@@ -117,19 +119,46 @@ parseExprList gl ll (expr:xs) id_type =
 
 parseExpr gl ll expr id_type =
     case expr of
+        CComma exprList _ -> parseExprList gl ll exprList IdRef
+        CAssign _ expr1 expr2 _ ->
+            parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
+        CCond expr1 Nothing expr2 _ ->
+            parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
+        CCond expr1 (Just expr2) expr3 _ ->
+            parseExpr3 gl ll (expr1, IdRef) (expr2, IdRef) (expr3, IdRef)
+        CBinary _ expr1 expr2 _ ->
+            parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
+        CCast _ expr _ -> parseExpr gl ll expr IdRef
+        CUnary _ expr _ -> parseExpr gl ll expr IdRef
+        CSizeofExpr expr _ -> parseExpr gl ll expr IdRef
+        CIndex expr1 expr2 _ ->
+            parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
         CCall expr exprList _ ->
             -- callee must be defined so ll can't be changed
             let gl' = parseExpr gl ll expr IdCall in
             parseExprList gl' ll exprList IdRef
+        CMember struct field _ _ -> -- field :: Ident is always indexed
+            let gl' = parseExpr gl ll expr IdRef in
+            (identToEntry field IdRef) : gl'
         CVar ident _ ->
             -- if the ident is a local variable, just discard it
             if inLocalList ll (identToString ident)
                 then gl
                 else (identToEntry ident id_type) : gl
         _ -> gl
+    where
+        parseExpr2 gl ll (expr1, t1) (expr2, t2) =
+            let gl' = parseExpr gl ll expr1 t1 in
+            parseExpr gl' ll expr2 t2
+        parseExpr3 gl ll exprt1 exprt2 (expr3, t3)  =
+            let gl' = parseExpr2 gl ll exprt1 exprt2 in
+            parseExpr gl' ll expr3 t3
 
 parseStmt gl ll stmt =
     case stmt of
+        CCase expr stmt _ ->
+            let gl' = parseExpr gl ll expr IdRef in
+            parseStmt gl' ll stmt
         CExpr (Just expr) _ -> parseExpr gl ll expr IdRef
         _ -> gl
 

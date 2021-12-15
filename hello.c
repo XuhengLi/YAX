@@ -27,5 +27,15 @@ int func2(char arg3, unsigned long arg4)
 
 void func3(int arg5)
 {
+	int j;
+
+	j = global2;
+
+	j = cond1 ? if_true : else_false;
+	j = cond2 ? : only_false;
+	if (cond1)
+		j = global1;
+	else
+		j = beef;
 	func2(foo, 2, bar, arg5, dead);
 }
