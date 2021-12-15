@@ -138,7 +138,7 @@ parseExpr gl ll expr id_type =
             let gl' = parseExpr gl ll expr IdCall in
             parseExprList gl' ll exprList IdRef
         CMember struct field _ _ -> -- field :: Ident is always indexed
-            let gl' = parseExpr gl ll expr IdRef in
+            let gl' = parseExpr gl ll struct IdRef in
             (identToEntry field IdRef) : gl'
         CVar ident _ ->
             -- if the ident is a local variable, just discard it
