@@ -29,19 +29,21 @@ readExt = do
     print $ parseExtDecl source $ initPos "./ext.c"
 -}
 
-data EntryType = IdDecl | IdRef | IdCall | IdLabel deriving Eq
-instance Show EntryType where
-    show IdDecl = "IdDecl"
-    show IdRef = "IdRef"
-    show IdCall = "IdCall"
-    show IdLabel = "IdLabel"
+data EntryType = IdDecl | IdRef | IdCall | IdLabel deriving (Eq, Show)
+-- Not meaningful, just in case of sorting for searching
+instance Ord EntryType where
+    IdDecl  `compare` _         = LT
+    IdRef   `compare` IdDecl    = GT
+    IdRef   `compare` _         = LT
+    IdCall  `compare` IdLabel   = LT
+    IdCall  `compare` _         = GT
+    IdLabel `compare` _         = GT
 
--- | IdEntry stores the information about a symbol:
--- (symbolName, filePath, line)
-type IdEntry = (String, String, Int, Int, EntryType)
-
---parseIdent :: Ident -> IdEntry
---parseIdent (Ident id _ info) =
+-- | IdEntryVal stores the information about a symbol:
+--  (file, row, column, type)
+type IdEntryVal = (String, Int, Int, EntryType)
+-- | (ident, key)
+type IdEntry = (String, IdEntryVal)
 
 identToEntry :: Ident -> EntryType -> IdEntry
 identToEntry ident entry_type =
@@ -52,14 +54,14 @@ identToEntry ident entry_type =
     let id_pos = posOfNode $ nodeInfo ident in
     let id_row = posRow $ id_pos in
     let id_col = posColumn $ id_pos in
-    (id_name, id_file, id_row, id_col, entry_type)
+    (id_name, (id_file, id_row, id_col, entry_type))
 
 -- Just use linear search as the size of the local list should be handy
 inLocalList :: [IdEntry] -> String -> Bool
 inLocalList _ "true" = True
 inLocalList _ "false" = True
 inLocalList [] id_name = False
-inLocalList ((e_name, _, _, _, _):xs) id_name =
+inLocalList ((e_name, _):xs) id_name =
     if e_name == id_name
         then True
         else inLocalList xs id_name
@@ -200,8 +202,8 @@ parseStmt gl ll stmt = case stmt of
         parseCFor (CFor _ _ _ _ _) = gl
 
 -- dummy local list used to indicate we are in local scope
-dummyll :: [IdEntry]
-dummyll = [("", "", 0, 0, IdDecl)]
+-- dummyll :: [IdEntry]
+-- dummyll = [("", "", 0, 0, IdDecl)]
 
 -- C code compound, gl is global symbol list, ll is local symbol list
 -- Updates to a local symbol in a compound is discarded when the compound
@@ -266,69 +268,69 @@ errorOnLeftM msg action = action >>= errorOnLeft msg
 
 -- Testing facilities
 
-testExpected1 :: [IdEntry]
-testExpected1 = [
-    ("dead","./hello.c",47,27,IdRef),
-    ("bar","./hello.c",47,16,IdRef),
-    ("foo","./hello.c",47,8,IdRef),
-    ("func2","./hello.c",47,2,IdCall),
-    ("fieldm","./hello.c",42,13,IdRef),
-    ("st3","./hello.c",42,6,IdCall),
-    ("m","./hello.c",42,2,IdRef),
-    ("fieldi","./hello.c",41,11,IdRef),
-    ("st2","./hello.c",41,6,IdRef),
-    ("test_label","./hello.c",40,1,IdLabel),
-    ("fieldk","./hello.c",38,10,IdRef),
-    ("st1","./hello.c",38,6,IdRef),
-    ("only_false","./hello.c",37,16,IdRef),
-    ("cond2","./hello.c",37,6,IdRef),
-    ("else_false","./hello.c",36,24,IdRef),
-    ("if_true","./hello.c",36,14,IdRef),
-    ("cond1","./hello.c",36,6,IdRef),
-    ("global2","./hello.c",34,6,IdRef),
-    ("func3","./hello.c",30,6,IdDecl),
-    ("field2","./hello.c",4,31,IdDecl),
-    ("field1","./hello.c",4,18,IdDecl),
-    ("st1","./hello.c",4,8,IdDecl),
-    ("gloabl2","./hello.c",2,5,IdDecl),
-    ("global0","./hello.c",1,5,IdDecl),
-    ("cond1","./hello.c",43,6,IdRef),
-    ("global1","./hello.c",44,7,IdRef),
-    ("beef","./hello.c",46,7,IdRef)
-    ]
-
-stringDef :: String
-stringDef = "\ESC[0m"
-
-stringRed :: String
-stringRed = "\ESC[31m"
-
-stringGreen :: String
-stringGreen = "\ESC[32m"
-
-stringColor :: String -> String -> String
-stringColor color str = color ++ str ++ stringDef
-
-runTest :: String -> [IdEntry] -> IO ()
-runTest input_file expected = do
-    ast <- errorOnLeftM "Parse Error" $
-        parseCFile (newGCC "gcc") Nothing [""] input_file
-    case ast of
-        CTranslUnit l _ ->
-            let res = parseTranslUnit [] l in
-            if hasDup res && length res == length expected
-                then die $ "has duplicate entries"
-                else checkRes res
-    where
-        hasDup xs = length (nub xs) /= length xs
-        checkRes [] = putStrLn $ stringColor stringGreen "Passed!"
-        checkRes (x:xs) =
-            case find (\e -> e == x) expected of
-                Just _ -> checkRes xs
-                _ -> do
-                    putStrLn $ stringColor
-                                stringRed
-                                ((show x) ++ " not found in expected")
-                    checkRes xs
+-- testExpected1 :: [IdEntry]
+-- testExpected1 = [
+--     ("dead","./hello.c",47,27,IdRef),
+--     ("bar","./hello.c",47,16,IdRef),
+--     ("foo","./hello.c",47,8,IdRef),
+--     ("func2","./hello.c",47,2,IdCall),
+--     ("fieldm","./hello.c",42,13,IdRef),
+--     ("st3","./hello.c",42,6,IdCall),
+--     ("m","./hello.c",42,2,IdRef),
+--     ("fieldi","./hello.c",41,11,IdRef),
+--     ("st2","./hello.c",41,6,IdRef),
+--     ("test_label","./hello.c",40,1,IdLabel),
+--     ("fieldk","./hello.c",38,10,IdRef),
+--     ("st1","./hello.c",38,6,IdRef),
+--     ("only_false","./hello.c",37,16,IdRef),
+--     ("cond2","./hello.c",37,6,IdRef),
+--     ("else_false","./hello.c",36,24,IdRef),
+--     ("if_true","./hello.c",36,14,IdRef),
+--     ("cond1","./hello.c",36,6,IdRef),
+--     ("global2","./hello.c",34,6,IdRef),
+--     ("func3","./hello.c",30,6,IdDecl),
+--     ("field2","./hello.c",4,31,IdDecl),
+--     ("field1","./hello.c",4,18,IdDecl),
+--     ("st1","./hello.c",4,8,IdDecl),
+--     ("gloabl2","./hello.c",2,5,IdDecl),
+--     ("global0","./hello.c",1,5,IdDecl),
+--     ("cond1","./hello.c",43,6,IdRef),
+--     ("global1","./hello.c",44,7,IdRef),
+--     ("beef","./hello.c",46,7,IdRef)
+--     ]
+-- 
+-- stringDef :: String
+-- stringDef = "\ESC[0m"
+-- 
+-- stringRed :: String
+-- stringRed = "\ESC[31m"
+-- 
+-- stringGreen :: String
+-- stringGreen = "\ESC[32m"
+-- 
+-- stringColor :: String -> String -> String
+-- stringColor color str = color ++ str ++ stringDef
+-- 
+-- runTest :: String -> [IdEntry] -> IO ()
+-- runTest input_file expected = do
+--     ast <- errorOnLeftM "Parse Error" $
+--         parseCFile (newGCC "gcc") Nothing [""] input_file
+--     case ast of
+--         CTranslUnit l _ ->
+--             let res = parseTranslUnit [] l in
+--             if hasDup res && length res == length expected
+--                 then die $ "has duplicate entries"
+--                 else checkRes res
+--     where
+--         hasDup xs = length (nub xs) /= length xs
+--         checkRes [] = putStrLn $ stringColor stringGreen "Passed!"
+--         checkRes (x:xs) =
+--             case find (\e -> e == x) expected of
+--                 Just _ -> checkRes xs
+--                 _ -> do
+--                     putStrLn $ stringColor
+--                                 stringRed
+--                                 ((show x) ++ " not found in expected")
+--                     checkRes xs
 
 
