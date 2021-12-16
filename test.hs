@@ -19,6 +19,8 @@ import System.Directory
 import System.FilePath
 import System.Posix.Files
 
+import Control.Parallel.Strategies
+
 {-
 parseC :: InputStream -> Position -> Either ParseError CTranslUnit
 parseC input initialPosition =
@@ -263,12 +265,21 @@ readHello f = do
                 CTranslUnit l _ -> mapM_ print $ parseTranslUnit [] l
         Left err -> print err
 
+parseAST :: CTranslationUnit a -> [IdEntry]
+parseAST (CTranslUnit l _) = parseTranslUnit [] l
+
 readWithPrep :: String -> IO ()
 readWithPrep input_file = do
     ast <- errorOnLeftM "Parse Error" $
         parseCFile (newGCC "gcc") Nothing [""] input_file
-    case ast of
-        CTranslUnit l _ -> mapM_ print $ parseTranslUnit [] l
+    mapM_ print $ parseAST ast
+
+errorOnLeft :: (Show a) => String -> (Either a b) -> IO b
+errorOnLeft msg = either (error . ((msg ++ ": ")++).show) return
+errorOnLeftM :: (Show a) => String -> IO (Either a b) -> IO b
+errorOnLeftM msg action = action >>= errorOnLeft msg
+
+
 
 usage :: IO ()
 usage = do
@@ -304,18 +315,24 @@ main = do
             contents <- traverseDir f excludeDot
             handleFiles contents
         else die $ ("File does not exists: " ++) $ show f
-    handleFiles [] = return ()
-    handleFiles (f:xs) = do
-        handleFileDir f
-        handleFiles xs
+    -- parHandleFiles [] = return ()
+    -- parHandleFiles fs = do
+    --     let (as, bs) = splitAt (length fs `div` 1) fs
+    --         solution = runEval $ do
+    --             as' <- rpar (force (map readWithPrep as))
+    --             bs' <- rpar (force (map readWithPrep bs))
+    -- handleFiles fs = let res = map doIndex fs in
+    --     printRes res
+    handleFiles fs = do
+        mapM_ readWithPrep fs
+    printRes [] = return ()
+    printRes (x:xs) = do
+        e <- x
+        print e
+        printRes xs
     excludeDot "." = True
     excludeDot ".." = True
-    excludeDot _ = True
-
-errorOnLeft :: (Show a) => String -> (Either a b) -> IO b
-errorOnLeft msg = either (error . ((msg ++ ": ")++).show) return
-errorOnLeftM :: (Show a) => String -> IO (Either a b) -> IO b
-errorOnLeftM msg action = action >>= errorOnLeft msg
+    excludeDot _ = False
 
 -- Testing facilities
 
