@@ -8,8 +8,16 @@ import Language.C.Syntax.AST
 import Language.C.Data.Ident
 import Language.C.System.GCC
 
+import System.IO
+import System.Environment
+import System.Directory
 import System.Exit
 import Data.List
+
+import Control.Monad
+import System.Directory
+import System.FilePath
+import System.Posix.Files
 
 {-
 parseC :: InputStream -> Position -> Either ParseError CTranslUnit
@@ -255,11 +263,54 @@ readHello f = do
                 CTranslUnit l _ -> mapM_ print $ parseTranslUnit [] l
         Left err -> print err
 
+readWithPrep :: String -> IO ()
 readWithPrep input_file = do
     ast <- errorOnLeftM "Parse Error" $
         parseCFile (newGCC "gcc") Nothing [""] input_file
     case ast of
         CTranslUnit l _ -> mapM_ print $ parseTranslUnit [] l
+
+usage :: IO ()
+usage = do
+    prog <- getProgName
+    die $ "Usage: " ++ prog ++ " <filename>|<directory>"
+
+-- Borrowed from https://stackoverflow.com/a/23822913
+traverseDir :: FilePath -> (FilePath -> Bool) -> IO [FilePath]
+traverseDir top exclude = do
+  ds <- getDirectoryContents top
+  paths <- forM (filter (not.exclude) ds) $ \d -> do
+    let path = top </> d
+    s <- getFileStatus path
+    if isDirectory s
+      then traverseDir path exclude
+      else return [path]
+  return (concat paths)
+
+main :: IO ()
+main = do
+    args <- getArgs
+    case args of
+        [f] -> handleFileDir f
+        _   -> usage
+    where
+    handleFileDir f = do
+        isF <- doesFileExist f
+        if isF then readWithPrep f
+        else  handleDir f
+    handleDir f = do
+        isD <- doesDirectoryExist f
+        if isD then do
+            contents <- traverseDir f excludeDot
+            handleFiles contents
+        else die $ ("File does not exists: " ++) $ show f
+    handleFiles [] = return ()
+    handleFiles (f:xs) = do
+        handleFileDir f
+        handleFiles xs
+    excludeDot "." = True
+    excludeDot ".." = True
+    excludeDot _ = True
 
 errorOnLeft :: (Show a) => String -> (Either a b) -> IO b
 errorOnLeft msg = either (error . ((msg ++ ": ")++).show) return
