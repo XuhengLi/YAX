@@ -318,6 +318,7 @@ filesToStreamList fs = sequence $ map (\f -> do
                                         return (s, f))
                                         fs
 
+-- Credit: https://stackoverflow.com/questions/19117922/parallel-folding-in-haskell/19119503
 pfold :: (a -> a -> a) -> [a] -> a
 pfold _ [x] = x
 pfold mappend xs  = (ys `par` zs) `pseq` (ys `mappend` zs) where
@@ -360,7 +361,8 @@ main = do
     parHandleStreams :: [(InputStream, FilePath)] -> IdDB
     parHandleStreams ss =
         pfold (Map.unionWith unionResult) $
-            parMap rpar doHandleStream ss
+            -- parMap rpar doHandleStream ss
+            withStrategy (parBuffer 500 rpar) . map doHandleStream $ ss
     unionResult :: [IdEntry] -> [IdEntry] -> [IdEntry]
     unionResult new old = new ++ old
     excludeDot "." = True
