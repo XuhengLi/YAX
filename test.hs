@@ -324,13 +324,23 @@ main = do
         else die $ ("File does not exists: " ++) $ show f
     parHandleFiles :: [String] -> IO [IdEntry]
     parHandleFiles fs = do
-        let (as, bs) = splitAt (length fs `div` 1) fs in
+        let (as, bs) = splitAt (length fs `div` 2) fs in
             runEval $ do
                 as' <- rpar (force map readWithPrep' as)
                 bs' <- rpar (force map readWithPrep' bs)
                 rseq as'
                 rseq bs'
                 return (combineIOList as' bs')
+                -- let mres = runEval (parMap readWithPrep' fs) in
+                --     do
+                --         res <- sequence mres
+                --         return $ concat res
+    parMap :: (a -> b) -> [a] -> Eval [b]
+    parMap f [] = return []
+    parMap f (a:as) = do
+        b <- rpar (f a)
+        bs <- parMap f as
+        return (b:bs)
     combineIOList :: [IO [IdEntry]] -> [IO [IdEntry]] -> IO [IdEntry]
     combineIOList as bs = do
         as' <- sequence as
