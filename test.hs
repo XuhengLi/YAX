@@ -312,8 +312,11 @@ traverseDir top exclude = do
       else return [path]
   return (concat paths)
 
-filesToStreamList :: [String] -> IO [InputStream]
-filesToStreamList fs = sequence $ map readInputStream fs
+filesToStreamList :: [FilePath] -> IO [(InputStream, FilePath)]
+filesToStreamList fs = sequence $ map (\f -> do
+                                        s <- readInputStream f
+                                        return (s, f))
+                                        fs
 
 pfold :: (a -> a -> a) -> [a] -> a
 pfold _ [x] = x
@@ -346,26 +349,20 @@ main = do
                     print $ Map.lookup "xxx" $ parHandleStreams contents
                     -- error "-p"
         else die $ ("File does not exists: " ++) $ show f
-    doHandleStream :: InputStream -> IdDB
-    doHandleStream source = case parseC source $ initPos "./tests/hello8.c" of -- TODO: pass file nanme
+    doHandleStream :: (InputStream, FilePath) -> IdDB
+    doHandleStream (s, f) = case parseC s $ initPos f of -- TODO: pass file nanme
         Right tu -> case tu of
             CTranslUnit l _ -> parseTranslUnit Map.empty l
         Left err -> Map.singleton "???" [dummyEntry] -- XXX: debugging
-    handleStreams :: [InputStream] -> IdDB
+    handleStreams :: [(InputStream, FilePath)] -> IdDB
     handleStreams ss = foldl (Map.unionWith unionResult) Map.empty $
                             map doHandleStream ss
-    parHandleStreams :: [InputStream] -> IdDB
+    parHandleStreams :: [(InputStream, FilePath)] -> IdDB
     parHandleStreams ss =
         pfold (Map.unionWith unionResult) $
-            runEval (parMap doHandleStream ss)
+            parMap rpar doHandleStream ss
     unionResult :: [IdEntry] -> [IdEntry] -> [IdEntry]
     unionResult new old = new ++ old
-    parMap :: (a -> b) -> [a] -> Eval [b]
-    parMap f [] = return []
-    parMap f (a:as) = do
-        b <- rpar (f a)
-        bs <- parMap f as
-        return (b:bs)
     excludeDot "." = True
     excludeDot ".." = True
     excludeDot _ = False
