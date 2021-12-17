@@ -303,25 +303,44 @@ traverseDir top exclude = do
       else return [path]
   return (concat paths)
 
+filesToStreamList :: [String] -> IO [InputStream]
+filesToStreamList fs = sequence $ map readInputStream fs
+
 main :: IO ()
 main = do
     args <- getArgs
     case args of
-        [f] -> handleFileDir f
+        [f, c] -> handleFileDir f c
         _   -> usage
     where
-    handleFileDir f = do
+    handleFileDir f c = do
         isF <- doesFileExist f
         if isF then readWithPrep f
-        else  handleDir f
-    handleDir f = do
+        else  handleDir f c
+    handleDir f c = do
         isD <- doesDirectoryExist f
         if isD then do
-            contents <- traverseDir f excludeDot
-            -- handleFiles contents
-            res <- parHandleFiles contents
-            print res
+            files <- traverseDir f excludeDot
+            contents <- filesToStreamList files
+            case c of
+                "-s" -> do
+                    -- handleFiles contents
+                    mapM_  print $ handleStreams contents
+                "-p" -> do
+                    -- res <- parHandleFiles contents
+                    -- print res
+                    mapM_ print $ parHandleStreams contents
         else die $ ("File does not exists: " ++) $ show f
+    doHandleStream :: InputStream -> [IdEntry]
+    doHandleStream source = case parseC source $ initPos "./tests/hello8.c" of -- TODO: pass file nanme
+        Right tu -> case tu of
+            CTranslUnit l _ -> parseTranslUnit [] l
+        Left err -> [("???",("",0,0,IdRef))]
+    handleStreams :: [InputStream] -> [IdEntry]
+    handleStreams ss = concat $ map doHandleStream ss
+    parHandleStreams :: [InputStream] -> [IdEntry]
+    parHandleStreams ss =
+        concat $ runEval (parMap doHandleStream ss)
     parHandleFiles :: [String] -> IO [IdEntry]
     parHandleFiles fs = do
         let (as, bs) = splitAt (length fs `div` 2) fs in
