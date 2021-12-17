@@ -20,6 +20,7 @@ import System.FilePath
 import System.Posix.Files
 
 import Control.Parallel.Strategies
+import Control.DeepSeq
 
 {-
 parseC :: InputStream -> Position -> Either ParseError CTranslUnit
@@ -274,12 +275,16 @@ readWithPrep input_file = do
         parseCFile (newGCC "gcc") Nothing [""] input_file
     mapM_ print $ parseAST ast
 
+readWithPrep' :: String -> IO [IdEntry]
+readWithPrep' input_file = do
+    ast <- errorOnLeftM "Parse Error" $
+        parseCFile (newGCC "gcc") Nothing [""] input_file
+    return $ parseAST ast
+
 errorOnLeft :: (Show a) => String -> (Either a b) -> IO b
 errorOnLeft msg = either (error . ((msg ++ ": ")++).show) return
 errorOnLeftM :: (Show a) => String -> IO (Either a b) -> IO b
 errorOnLeftM msg action = action >>= errorOnLeft msg
-
-
 
 usage :: IO ()
 usage = do
@@ -313,23 +318,29 @@ main = do
         isD <- doesDirectoryExist f
         if isD then do
             contents <- traverseDir f excludeDot
-            handleFiles contents
+            -- handleFiles contents
+            res <- parHandleFiles contents
+            print res
         else die $ ("File does not exists: " ++) $ show f
-    -- parHandleFiles [] = return ()
-    -- parHandleFiles fs = do
-    --     let (as, bs) = splitAt (length fs `div` 1) fs
-    --         solution = runEval $ do
-    --             as' <- rpar (force (map readWithPrep as))
-    --             bs' <- rpar (force (map readWithPrep bs))
-    -- handleFiles fs = let res = map doIndex fs in
-    --     printRes res
+    parHandleFiles :: [String] -> IO [IdEntry]
+    parHandleFiles fs = do
+        let (as, bs) = splitAt (length fs `div` 1) fs in
+            runEval $ do
+                as' <- rpar (force map readWithPrep' as)
+                bs' <- rpar (force map readWithPrep' bs)
+                rseq as'
+                rseq bs'
+                return (combineIOList as' bs')
+    combineIOList :: [IO [IdEntry]] -> [IO [IdEntry]] -> IO [IdEntry]
+    combineIOList as bs = do
+        as' <- sequence as
+        bs' <- sequence bs
+        return $ (concat as') ++ (concat bs')
+    handleFiles :: [String] -> IO ()
     handleFiles fs = do
-        mapM_ readWithPrep fs
-    printRes [] = return ()
-    printRes (x:xs) = do
-        e <- x
-        print e
-        printRes xs
+        rs <- sequence $ map readWithPrep' fs
+        mapM_ print rs
+        return ()
     excludeDot "." = True
     excludeDot ".." = True
     excludeDot _ = False
