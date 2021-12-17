@@ -20,6 +20,7 @@ import System.Directory
 import System.FilePath
 import System.Posix.Files
 
+import Control.Parallel
 import Control.Parallel.Strategies
 import Control.DeepSeq
 
@@ -314,6 +315,14 @@ traverseDir top exclude = do
 filesToStreamList :: [String] -> IO [InputStream]
 filesToStreamList fs = sequence $ map readInputStream fs
 
+pfold :: (a -> a -> a) -> [a] -> a
+pfold _ [x] = x
+pfold mappend xs  = (ys `par` zs) `pseq` (ys `mappend` zs) where
+    len = length xs
+    (ys', zs') = splitAt (len `div` 2) xs
+    ys = pfold mappend ys'
+    zs = pfold mappend zs'
+
 main :: IO ()
 main = do
     args <- getArgs
@@ -332,9 +341,9 @@ main = do
             contents <- filesToStreamList files
             case c of
                 "-s" -> do
-                    print $ handleStreams contents
+                    print $ Map.lookup "xxx" $ handleStreams contents
                 "-p" -> do
-                    print $ parHandleStreams contents
+                    print $ Map.lookup "xxx" $ parHandleStreams contents
                     -- error "-p"
         else die $ ("File does not exists: " ++) $ show f
     doHandleStream :: InputStream -> IdDB
@@ -347,7 +356,7 @@ main = do
                             map doHandleStream ss
     parHandleStreams :: [InputStream] -> IdDB
     parHandleStreams ss =
-        foldl (Map.unionWith unionResult) Map.empty $
+        pfold (Map.unionWith unionResult) $
             runEval (parMap doHandleStream ss)
     unionResult :: [IdEntry] -> [IdEntry] -> [IdEntry]
     unionResult new old = new ++ old
