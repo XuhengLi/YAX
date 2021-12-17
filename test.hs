@@ -55,6 +55,7 @@ instance Ord EntryType where
 type IdEntryVal = (String, Int, Int, EntryType)
 -- | (ident, key)
 type IdEntry = (String, IdEntryVal)
+type IdDB = [IdEntry]
 
 identToEntry :: Ident -> EntryType -> IdEntry
 identToEntry ident entry_type =
@@ -68,7 +69,7 @@ identToEntry ident entry_type =
     (id_name, (id_file, id_row, id_col, entry_type))
 
 -- Just use linear search as the size of the local list should be handy
-inLocalList :: [IdEntry] -> String -> Bool
+inLocalList :: IdDB -> String -> Bool
 inLocalList _ "true" = True
 inLocalList _ "false" = True
 inLocalList [] id_name = False
@@ -77,21 +78,24 @@ inLocalList ((e_name, _):xs) id_name =
         then True
         else inLocalList xs id_name
 
-parseDeclList :: [IdEntry] -> [IdEntry] -> [(Maybe (CDeclarator a0), b0, c0)] ->
-    ([IdEntry], [IdEntry])
+addEntry :: Ident -> EntryType -> IdDB -> IdDB
+addEntry ident t gl = (identToEntry ident t) : gl
+
+parseDeclList :: IdDB -> IdDB -> [(Maybe (CDeclarator a0), b0, c0)] ->
+    (IdDB, IdDB)
 parseDeclList gl ll [] = (gl, ll)
 parseDeclList gl ll ((cDeclr, cInit, cExp):xs) = case cDeclr of
     Nothing -> (gl, ll)
     Just (CDeclr (Just ident) _ _ _ _) ->
         case ll of
-            [] -> let gl' = (identToEntry ident IdDecl) : gl in parseDeclList gl' ll xs
-            _ -> let ll' = (identToEntry ident IdDecl) : ll in parseDeclList gl ll' xs
+            [] -> let gl' = addEntry ident IdDecl gl in parseDeclList gl' ll xs
+            _ -> let ll' = addEntry ident IdDecl ll in parseDeclList gl ll' xs -- TODO: this haven't been addressed yet
 
-parseCSU :: [IdEntry] -> [IdEntry] -> CStructureUnion a -> ([IdEntry], [IdEntry])
+parseCSU :: IdDB -> IdDB -> CStructureUnion a -> (IdDB, IdDB)
 parseCSU gl ll (CStruct _ mident mdecl _ _) = case mident of
     Just ident ->
         -- struct variable declarations are always indexed
-        let gl' = ((identToEntry ident IdDecl) : gl) in
+        let gl' = addEntry ident IdDecl gl in
         case mdecl of
             Just declL -> (parseStructDeclList gl' declL, ll)
             _ -> (gl', ll)
@@ -102,8 +106,8 @@ parseCSU gl ll (CStruct _ mident mdecl _ _) = case mident of
         parseStructDeclList gl' (x:xs) =
             let (dl, _) = (parseDecl gl' [] x) in parseStructDeclList dl xs
 
-parseCType :: [IdEntry] -> [IdEntry] -> [CDeclarationSpecifier a] ->
-    [(Maybe (CDeclarator a0), b0, c0)] -> ([IdEntry], [IdEntry])
+parseCType :: IdDB -> IdDB -> [CDeclarationSpecifier a] ->
+    [(Maybe (CDeclarator a0), b0, c0)] -> (IdDB, IdDB)
 parseCType gl ll [] _ = (gl, ll)
 parseCType gl ll (cType:xs) declList = case cType of
     -- struct or union
@@ -117,8 +121,8 @@ parseCType gl ll (cType:xs) declList = case cType of
 
 --parseDecl :: CDeclaration a -> IdEntry
 -- parseDecl gl (CDecl cTypes [] info) = gl -- void function arguments
-parseDecl :: [IdEntry] -> [IdEntry] -> (CDeclaration a) ->
-    ([IdEntry], [IdEntry])
+parseDecl :: IdDB -> IdDB -> (CDeclaration a) ->
+    (IdDB, IdDB)
 parseDecl gl ll (CDecl cTypeList declrList _) =
     parseCType gl ll cTypeList declrList
 
@@ -149,12 +153,12 @@ parseExpr gl ll expr id_type = case expr of
         parseExprList gl' ll exprList IdRef
     CMember struct field _ _ -> -- field :: Ident is always indexed
         let gl' = parseExpr gl ll struct IdRef in
-        (identToEntry field IdRef) : gl'
+        addEntry field IdRef gl'
     CVar ident _ ->
         -- if the ident is a local variable, just discard it
         if inLocalList ll (identToString ident)
             then gl
-            else (identToEntry ident id_type) : gl
+            else addEntry ident id_type gl
     _ -> gl
 
 parseExpr2 gl ll (expr1, t1) (expr2, t2) =
@@ -165,10 +169,10 @@ parseExpr3 gl ll exprt1 exprt2 (expr3, t3)  =
     let gl' = parseExpr2 gl ll exprt1 exprt2 in
     parseExpr gl' ll expr3 t3
 
-parseStmt :: [IdEntry] -> [IdEntry] -> (CStatement a) -> [IdEntry]
+parseStmt :: IdDB -> IdDB -> (CStatement a) -> IdDB
 parseStmt gl ll stmt = case stmt of
     CLabel label stmt _ _ ->
-        let gl' = (identToEntry label IdLabel) : gl in
+        let gl' = addEntry label IdLabel gl in
         parseStmt gl' ll stmt
     CCase expr stmt _ ->
         let gl' = parseExpr gl ll expr IdRef in
@@ -197,7 +201,7 @@ parseStmt gl ll stmt = case stmt of
         parseStmt gl' ll stmt
     CFor _ _ _ _ _ -> parseCFor stmt
     CGoto label _ ->
-        (identToEntry label IdLabel) : gl
+        addEntry label IdLabel gl
     CReturn (Just expr) _ ->
         parseExpr gl ll expr IdRef
     _ -> gl
@@ -213,14 +217,14 @@ parseStmt gl ll stmt = case stmt of
         parseCFor (CFor _ _ _ _ _) = gl
 
 -- dummy local list used to indicate we are in local scope
--- dummyll :: [IdEntry]
+-- dummyll :: IdDB
 -- dummyll = [("", "", 0, 0, IdDecl)]
 
 -- C code compound, gl is global symbol list, ll is local symbol list
 -- Updates to a local symbol in a compound is discarded when the compound
 -- is parsed
-parseCompound :: [IdEntry] -> [IdEntry] -> [Ident] -> [CCompoundBlockItem a]
-    -> [IdEntry]
+parseCompound :: IdDB -> IdDB -> [Ident] -> [CCompoundBlockItem a]
+    -> IdDB
 parseCompound gl ll labels [] = gl -- end of parsing, ll is discarded
 parseCompound gl ll labels (blockItem:xs) = case blockItem of
     CBlockStmt stmt -> -- Stmt won't introduce new symbols
@@ -231,21 +235,21 @@ parseCompound gl ll labels (blockItem:xs) = case blockItem of
         parseCompound gl' ll' labels xs
     CNestedFunDef (_) -> gl -- GNU C nested function is not supported
 
-parseFunDeclr :: [IdEntry] -> (CDerivedDeclarator a) -> [IdEntry]
+parseFunDeclr :: IdDB -> (CDerivedDeclarator a) -> IdDB
 parseFunDeclr ll (CFunDeclr (Left _) _ _ ) = ll -- old-style function declaration is not supported
 parseFunDeclr ll (CFunDeclr (Right (cDecls, _)) _ _) =
     forEachCDecl ll cDecls
     where
-    forEachCDecl :: [IdEntry] -> [CDeclaration a] -> [IdEntry]
+    forEachCDecl :: IdDB -> [CDeclaration a] -> IdDB
     forEachCDecl rl [] = rl
     forEachCDecl rl (cDecl:xs) =
         let (new_rl, _) = (parseDecl rl [] cDecl) in forEachCDecl new_rl xs
 
 -- Function definitions
-parseDef :: [IdEntry] -> (CFunctionDef a) -> [IdEntry]
+parseDef :: IdDB -> (CFunctionDef a) -> IdDB
 parseDef gl (CFunDef cType cDeclr _ cCompound _) = case cDeclr of
     (CDeclr (Just ident) [cFunDeclr] _ _ _) ->
-        let gl' = (identToEntry ident IdDecl) : gl in -- add function name to global list
+        let gl' = addEntry ident IdDecl gl in -- add function name to global list
         let ll = parseFunDeclr [] cFunDeclr in -- add function arguments to local list
         case cCompound of
             (CCompound labels items _) ->
@@ -266,7 +270,7 @@ readHello f = do
                 CTranslUnit l _ -> mapM_ print $ parseTranslUnit [] l
         Left err -> print err
 
-parseAST :: CTranslationUnit a -> [IdEntry]
+parseAST :: CTranslationUnit a -> IdDB
 parseAST (CTranslUnit l _) = parseTranslUnit [] l
 
 readWithPrep :: String -> IO ()
@@ -275,7 +279,7 @@ readWithPrep input_file = do
         parseCFile (newGCC "gcc") Nothing [""] input_file
     mapM_ print $ parseAST ast
 
-readWithPrep' :: String -> IO [IdEntry]
+readWithPrep' :: String -> IO IdDB
 readWithPrep' input_file = do
     ast <- errorOnLeftM "Parse Error" $
         parseCFile (newGCC "gcc") Nothing [""] input_file
@@ -331,17 +335,17 @@ main = do
                     -- print res
                     mapM_ print $ parHandleStreams contents
         else die $ ("File does not exists: " ++) $ show f
-    doHandleStream :: InputStream -> [IdEntry]
+    doHandleStream :: InputStream -> IdDB
     doHandleStream source = case parseC source $ initPos "./tests/hello8.c" of -- TODO: pass file nanme
         Right tu -> case tu of
             CTranslUnit l _ -> parseTranslUnit [] l
         Left err -> [("???",("",0,0,IdRef))]
-    handleStreams :: [InputStream] -> [IdEntry]
+    handleStreams :: [InputStream] -> IdDB
     handleStreams ss = concat $ map doHandleStream ss
-    parHandleStreams :: [InputStream] -> [IdEntry]
+    parHandleStreams :: [InputStream] -> IdDB
     parHandleStreams ss =
         concat $ runEval (parMap doHandleStream ss)
-    parHandleFiles :: [String] -> IO [IdEntry]
+    parHandleFiles :: [String] -> IO IdDB
     parHandleFiles fs = do
         let (as, bs) = splitAt (length fs `div` 2) fs in
             runEval $ do
@@ -360,7 +364,7 @@ main = do
         b <- rpar (f a)
         bs <- parMap f as
         return (b:bs)
-    combineIOList :: [IO [IdEntry]] -> [IO [IdEntry]] -> IO [IdEntry]
+    combineIOList :: [IO IdDB] -> [IO IdDB] -> IO IdDB
     combineIOList as bs = do
         as' <- sequence as
         bs' <- sequence bs
@@ -376,7 +380,7 @@ main = do
 
 -- Testing facilities
 
--- testExpected1 :: [IdEntry]
+-- testExpected1 :: IdDB
 -- testExpected1 = [
 --     ("dead","./hello.c",47,27,IdRef),
 --     ("bar","./hello.c",47,16,IdRef),
@@ -419,7 +423,7 @@ main = do
 -- stringColor :: String -> String -> String
 -- stringColor color str = color ++ str ++ stringDef
 -- 
--- runTest :: String -> [IdEntry] -> IO ()
+-- runTest :: String -> IdDB -> IO ()
 -- runTest input_file expected = do
 --     ast <- errorOnLeftM "Parse Error" $
 --         parseCFile (newGCC "gcc") Nothing [""] input_file
