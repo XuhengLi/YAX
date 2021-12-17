@@ -13,6 +13,7 @@ import System.Environment
 import System.Directory
 import System.Exit
 import Data.List
+import qualified Data.Map.Strict as Map
 
 import Control.Monad
 import System.Directory
@@ -22,25 +23,9 @@ import System.Posix.Files
 import Control.Parallel.Strategies
 import Control.DeepSeq
 
-{-
-parseC :: InputStream -> Position -> Either ParseError CTranslUnit
-parseC input initialPosition =
-  fmap fst $ execParser translUnitP input initialPosition builtinTypeNames (namesStartingFrom 0)
+import Data.Map.Internal.Debug
 
-parseExtDecl :: InputStream -> Position -> Either ParseError CExtDecl
-parseExtDecl input initialPosition =
-  fmap fst $ execParser extDeclP input initialPosition builtinTypeNames (namesStartingFrom 0)
-
-parseStmt :: InputStream -> Position -> Either ParseError CStat
-parseStmt input initialPosition =
-  fmap fst $ execParser statementP input initialPosition builtinTypeNames (namesStartingFrom 0)
-
-readExt = do
-    source <- readInputStream "./ext.c"
-    print $ parseExtDecl source $ initPos "./ext.c"
--}
-
-data EntryType = IdDecl | IdRef | IdCall | IdLabel deriving (Eq, Show)
+data EntryType = IdDecl | IdRef | IdCall | IdLabel | IdLocal deriving (Eq, Show)
 -- Not meaningful, just in case of sorting for searching
 instance Ord EntryType where
     IdDecl  `compare` _         = LT
@@ -49,37 +34,54 @@ instance Ord EntryType where
     IdCall  `compare` IdLabel   = LT
     IdCall  `compare` _         = GT
     IdLabel `compare` _         = GT
+    IdLocal `compare` _         = EQ
 
 -- | IdEntryVal stores the information about a symbol:
 --  (file, row, column, type)
 type IdEntryVal = (String, Int, Int, EntryType)
 -- | (ident, key)
-type IdEntry = (String, IdEntryVal)
-type IdDB = [IdEntry]
+-- type IdEntry = (String, IdEntryVal)
+-- type IdDB = [IdEntry]
+
+type IdEntry = IdEntryVal
+type IdDB = Map.Map String [IdEntry]
+
+-- dummy entry for local symbols to avoid unnecessary GC
+dummyEntry :: IdEntry
+dummyEntry = ("", 0, 0, IdLocal)
 
 identToEntry :: Ident -> EntryType -> IdEntry
 identToEntry ident entry_type =
-    let id_name = (identToString ident) in
+    -- let id_name = (identToString ident) in
     let id_file = case fileOfNode ident of
                     Nothing -> ""
                     Just p -> p in
     let id_pos = posOfNode $ nodeInfo ident in
     let id_row = posRow $ id_pos in
     let id_col = posColumn $ id_pos in
-    (id_name, (id_file, id_row, id_col, entry_type))
+    (id_file, id_row, id_col, entry_type)
 
 -- Just use linear search as the size of the local list should be handy
 inLocalList :: IdDB -> String -> Bool
+-- "true" and "false" are excluded since they are widely used as keywords
 inLocalList _ "true" = True
 inLocalList _ "false" = True
-inLocalList [] id_name = False
-inLocalList ((e_name, _):xs) id_name =
-    if e_name == id_name
-        then True
-        else inLocalList xs id_name
+inLocalList db id_name =  case Map.lookup id_name db of
+    Just _ -> True
+    _ -> False
 
 addEntry :: Ident -> EntryType -> IdDB -> IdDB
-addEntry ident t gl = (identToEntry ident t) : gl
+addEntry ident IdLocal gl =
+    let id_name = (identToString ident) in
+    Map.insert id_name [dummyEntry] gl
+addEntry ident t gl =
+    let id_name = (identToString ident) in
+    let id_entry = identToEntry ident t in
+    Map.insertWith mergeEntry id_name [id_entry] gl
+    where
+    mergeEntry :: [IdEntry] -> [IdEntry] -> [IdEntry]
+    mergeEntry [n] o = n : o
+    mergeEntry _ o = o -- we know new_value must be a singleton list
 
 parseDeclList :: IdDB -> IdDB -> [(Maybe (CDeclarator a0), b0, c0)] ->
     (IdDB, IdDB)
@@ -87,9 +89,9 @@ parseDeclList gl ll [] = (gl, ll)
 parseDeclList gl ll ((cDeclr, cInit, cExp):xs) = case cDeclr of
     Nothing -> (gl, ll)
     Just (CDeclr (Just ident) _ _ _ _) ->
-        case ll of
-            [] -> let gl' = addEntry ident IdDecl gl in parseDeclList gl' ll xs
-            _ -> let ll' = addEntry ident IdDecl ll in parseDeclList gl ll' xs -- TODO: this haven't been addressed yet
+        case null ll of
+            False -> let gl' = addEntry ident IdDecl gl in parseDeclList gl' ll xs
+            _ -> let ll' = addEntry ident IdLocal ll in parseDeclList gl ll' xs -- TODO: this haven't been addressed yet
 
 parseCSU :: IdDB -> IdDB -> CStructureUnion a -> (IdDB, IdDB)
 parseCSU gl ll (CStruct _ mident mdecl _ _) = case mident of
@@ -104,7 +106,7 @@ parseCSU gl ll (CStruct _ mident mdecl _ _) = case mident of
         -- struct fields are always indexed
         parseStructDeclList gl' [] = gl'
         parseStructDeclList gl' (x:xs) =
-            let (dl, _) = (parseDecl gl' [] x) in parseStructDeclList dl xs
+            let (dl, _) = (parseDecl gl' Map.empty x) in parseStructDeclList dl xs
 
 parseCType :: IdDB -> IdDB -> [CDeclarationSpecifier a] ->
     [(Maybe (CDeclarator a0), b0, c0)] -> (IdDB, IdDB)
@@ -126,12 +128,14 @@ parseDecl :: IdDB -> IdDB -> (CDeclaration a) ->
 parseDecl gl ll (CDecl cTypeList declrList _) =
     parseCType gl ll cTypeList declrList
 
--- expr and stmt won't introduce new symbols
+-- expr and stmt won't introduce new symbols so local DB is always discarded
+parseExprList :: IdDB -> IdDB -> [CExpression a] -> EntryType -> IdDB
 parseExprList gl ll [] _ = gl
 parseExprList gl ll (expr:xs) id_type =
     let gl' = parseExpr gl ll expr id_type in
     parseExprList gl' ll xs id_type
 
+parseExpr :: IdDB -> IdDB -> (CExpression a) -> EntryType -> IdDB
 parseExpr gl ll expr id_type = case expr of
     CComma exprList _ -> parseExprList gl ll exprList IdRef
     CAssign _ expr1 expr2 _ ->
@@ -161,10 +165,14 @@ parseExpr gl ll expr id_type = case expr of
             else addEntry ident id_type gl
     _ -> gl
 
+parseExpr2 :: IdDB -> IdDB -> (CExpression a, EntryType) ->
+    (CExpression a, EntryType) -> IdDB
 parseExpr2 gl ll (expr1, t1) (expr2, t2) =
     let gl' = parseExpr gl ll expr1 t1 in
     parseExpr gl' ll expr2 t2
 
+parseExpr3 :: IdDB -> IdDB -> (CExpression a, EntryType) ->
+    (CExpression a, EntryType) -> (CExpression a, EntryType) -> IdDB
 parseExpr3 gl ll exprt1 exprt2 (expr3, t3)  =
     let gl' = parseExpr2 gl ll exprt1 exprt2 in
     parseExpr gl' ll expr3 t3
@@ -216,11 +224,7 @@ parseStmt gl ll stmt = case stmt of
                 Just gl3 -> parseStmt gl3 ll stmt
         parseCFor (CFor _ _ _ _ _) = gl
 
--- dummy local list used to indicate we are in local scope
--- dummyll :: IdDB
--- dummyll = [("", "", 0, 0, IdDecl)]
-
--- C code compound, gl is global symbol list, ll is local symbol list
+-- C code compound, gl is global symbol DB, ll is local symbol DB
 -- Updates to a local symbol in a compound is discarded when the compound
 -- is parsed
 parseCompound :: IdDB -> IdDB -> [Ident] -> [CCompoundBlockItem a]
@@ -243,14 +247,14 @@ parseFunDeclr ll (CFunDeclr (Right (cDecls, _)) _ _) =
     forEachCDecl :: IdDB -> [CDeclaration a] -> IdDB
     forEachCDecl rl [] = rl
     forEachCDecl rl (cDecl:xs) =
-        let (new_rl, _) = (parseDecl rl [] cDecl) in forEachCDecl new_rl xs
+        let (new_rl, _) = (parseDecl rl Map.empty cDecl) in forEachCDecl new_rl xs
 
 -- Function definitions
 parseDef :: IdDB -> (CFunctionDef a) -> IdDB
 parseDef gl (CFunDef cType cDeclr _ cCompound _) = case cDeclr of
     (CDeclr (Just ident) [cFunDeclr] _ _ _) ->
         let gl' = addEntry ident IdDecl gl in -- add function name to global list
-        let ll = parseFunDeclr [] cFunDeclr in -- add function arguments to local list
+        let ll = parseFunDeclr Map.empty cFunDeclr in -- add function arguments to local list
         case cCompound of
             (CCompound labels items _) ->
                 parseCompound gl' ll labels items
@@ -258,7 +262,7 @@ parseDef gl (CFunDef cType cDeclr _ cCompound _) = case cDeclr of
 --parseTranslUnit ::
 parseTranslUnit gl [] = gl
 parseTranslUnit gl (x:xs) = case x of
-    CDeclExt decl -> let (dl, _) = (parseDecl gl [] decl) in parseTranslUnit dl xs
+    CDeclExt decl -> let (dl, _) = (parseDecl gl Map.empty decl) in parseTranslUnit dl xs
     CFDefExt def -> let dl = parseDef gl def in parseTranslUnit dl xs
     _ -> gl
 
@@ -267,11 +271,11 @@ readHello f = do
     case parseC source $ initPos f of
         Right tu ->
             case tu of
-                CTranslUnit l _ -> mapM_ print $ parseTranslUnit [] l
+                CTranslUnit l _ -> mapM_ print $ parseTranslUnit Map.empty l
         Left err -> print err
 
 parseAST :: CTranslationUnit a -> IdDB
-parseAST (CTranslUnit l _) = parseTranslUnit [] l
+parseAST (CTranslUnit l _) = parseTranslUnit Map.empty l
 
 readWithPrep :: String -> IO ()
 readWithPrep input_file = do
@@ -293,7 +297,7 @@ errorOnLeftM msg action = action >>= errorOnLeft msg
 usage :: IO ()
 usage = do
     prog <- getProgName
-    die $ "Usage: " ++ prog ++ " <filename>|<directory>"
+    die $ "Usage: " ++ prog ++ " <filename>|<directory> -p|-s"
 
 -- Borrowed from https://stackoverflow.com/a/23822913
 traverseDir :: FilePath -> (FilePath -> Bool) -> IO [FilePath]
@@ -328,55 +332,58 @@ main = do
             contents <- filesToStreamList files
             case c of
                 "-s" -> do
-                    -- handleFiles contents
-                    mapM_  print $ handleStreams contents
+                    print $ handleStreams contents
                 "-p" -> do
-                    -- res <- parHandleFiles contents
-                    -- print res
-                    mapM_ print $ parHandleStreams contents
+                    print $ parHandleStreams contents
+                    -- error "-p"
         else die $ ("File does not exists: " ++) $ show f
     doHandleStream :: InputStream -> IdDB
     doHandleStream source = case parseC source $ initPos "./tests/hello8.c" of -- TODO: pass file nanme
         Right tu -> case tu of
-            CTranslUnit l _ -> parseTranslUnit [] l
-        Left err -> [("???",("",0,0,IdRef))]
+            CTranslUnit l _ -> parseTranslUnit Map.empty l
+        Left err -> Map.singleton "???" [dummyEntry] -- XXX: debugging
     handleStreams :: [InputStream] -> IdDB
-    handleStreams ss = concat $ map doHandleStream ss
+    handleStreams ss = foldl (Map.unionWith unionResult) Map.empty $
+                            map doHandleStream ss
     parHandleStreams :: [InputStream] -> IdDB
     parHandleStreams ss =
-        concat $ runEval (parMap doHandleStream ss)
-    parHandleFiles :: [String] -> IO IdDB
-    parHandleFiles fs = do
-        let (as, bs) = splitAt (length fs `div` 2) fs in
-            runEval $ do
-                as' <- rpar (force map readWithPrep' as)
-                bs' <- rpar (force map readWithPrep' bs)
-                rseq as'
-                rseq bs'
-                return (combineIOList as' bs')
-                -- let mres = runEval (parMap readWithPrep' fs) in
-                --     do
-                --         res <- sequence mres
-                --         return $ concat res
+        foldl (Map.unionWith unionResult) Map.empty $
+            runEval (parMap doHandleStream ss)
+    unionResult :: [IdEntry] -> [IdEntry] -> [IdEntry]
+    unionResult new old = new ++ old
     parMap :: (a -> b) -> [a] -> Eval [b]
     parMap f [] = return []
     parMap f (a:as) = do
         b <- rpar (f a)
         bs <- parMap f as
         return (b:bs)
-    combineIOList :: [IO IdDB] -> [IO IdDB] -> IO IdDB
-    combineIOList as bs = do
-        as' <- sequence as
-        bs' <- sequence bs
-        return $ (concat as') ++ (concat bs')
-    handleFiles :: [String] -> IO ()
-    handleFiles fs = do
-        rs <- sequence $ map readWithPrep' fs
-        mapM_ print rs
-        return ()
     excludeDot "." = True
     excludeDot ".." = True
     excludeDot _ = False
+    -- XXX: Discard
+    -- parHandleFiles :: [String] -> IO IdDB
+    -- parHandleFiles fs = do
+    --     let (as, bs) = splitAt (length fs `div` 2) fs in
+    --         runEval $ do
+    --             as' <- rpar (force map readWithPrep' as)
+    --             bs' <- rpar (force map readWithPrep' bs)
+    --             rseq as'
+    --             rseq bs'
+    --             return (combineIOList as' bs')
+    --             -- let mres = runEval (parMap readWithPrep' fs) in
+    --             --     do
+    --             --         res <- sequence mres
+    --             --         return $ concat res
+    -- combineIOList :: [IO IdDB] -> [IO IdDB] -> IO IdDB
+    -- combineIOList as bs = do
+    --     as' <- sequence as
+    --     bs' <- sequence bs
+    --     return $ (concat as') ++ (concat bs')
+    -- handleFiles :: [String] -> IO ()
+    -- handleFiles fs = do
+    --     rs <- sequence $ map readWithPrep' fs
+    --     mapM_ print rs
+    --     return ()
 
 -- Testing facilities
 
