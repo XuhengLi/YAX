@@ -29,13 +29,14 @@ import Data.Map.Internal.Debug
 data EntryType = IdDecl | IdRef | IdCall | IdLabel | IdLocal deriving (Eq, Show)
 -- Not meaningful, just in case of sorting for searching
 instance Ord EntryType where
+    IdLocal `compare` _         = EQ
+    _       `compare` IdLocal   = EQ
     IdDecl  `compare` _         = LT
     IdRef   `compare` IdDecl    = GT
     IdRef   `compare` _         = LT
     IdCall  `compare` IdLabel   = LT
     IdCall  `compare` _         = GT
     IdLabel `compare` _         = GT
-    IdLocal `compare` _         = EQ
 
 -- | IdEntryVal stores the information about a symbol:
 --  (file, row, column, type)
@@ -93,6 +94,7 @@ parseDeclList gl ll ((cDeclr, cInit, cExp):xs) = case cDeclr of
         case null ll of
             False -> let gl' = addEntry ident IdDecl gl in parseDeclList gl' ll xs
             _ -> let ll' = addEntry ident IdLocal ll in parseDeclList gl ll' xs -- TODO: this haven't been addressed yet
+    _ -> (gl, ll)
 
 parseCSU :: IdDB -> IdDB -> CStructureUnion a -> (IdDB, IdDB)
 parseCSU gl ll (CStruct _ mident mdecl _ _) = case mident of
@@ -112,7 +114,7 @@ parseCSU gl ll (CStruct _ mident mdecl _ _) = case mident of
 parseCType :: IdDB -> IdDB -> [CDeclarationSpecifier a] ->
     [(Maybe (CDeclarator a0), b0, c0)] -> (IdDB, IdDB)
 parseCType gl ll [] _ = (gl, ll)
-parseCType gl ll (cType:xs) declList = case cType of
+parseCType gl ll (cType:_) declList = case cType of
     -- struct or union
     CTypeSpec (CSUType (csu) _) ->
         let (gl', ll') = parseCSU gl ll csu in
@@ -128,16 +130,17 @@ parseDecl :: IdDB -> IdDB -> (CDeclaration a) ->
     (IdDB, IdDB)
 parseDecl gl ll (CDecl cTypeList declrList _) =
     parseCType gl ll cTypeList declrList
+parseDecl gl ll _ = (gl, ll)
 
 -- expr and stmt won't introduce new symbols so local DB is always discarded
 parseExprList :: IdDB -> IdDB -> [CExpression a] -> EntryType -> IdDB
-parseExprList gl ll [] _ = gl
+parseExprList gl _ [] _ = gl
 parseExprList gl ll (expr:xs) id_type =
     let gl' = parseExpr gl ll expr id_type in
     parseExprList gl' ll xs id_type
 
 parseExpr :: IdDB -> IdDB -> (CExpression a) -> EntryType -> IdDB
-parseExpr gl ll expr id_type = case expr of
+parseExpr gl ll cexpr id_type = case cexpr of
     CComma exprList _ -> parseExprList gl ll exprList IdRef
     CAssign _ expr1 expr2 _ ->
         parseExpr2 gl ll (expr1, IdRef) (expr2, IdRef)
@@ -179,7 +182,7 @@ parseExpr3 gl ll exprt1 exprt2 (expr3, t3)  =
     parseExpr gl' ll expr3 t3
 
 parseStmt :: IdDB -> IdDB -> (CStatement a) -> IdDB
-parseStmt gl ll stmt = case stmt of
+parseStmt gl ll cstmt = case cstmt of
     CLabel label stmt _ _ ->
         let gl' = addEntry label IdLabel gl in
         parseStmt gl' ll stmt
@@ -208,29 +211,31 @@ parseStmt gl ll stmt = case stmt of
     CWhile expr stmt _ _ ->
         let gl' = parseExpr gl ll expr IdRef in
         parseStmt gl' ll stmt
-    CFor _ _ _ _ _ -> parseCFor stmt
+    CFor _ _ _ _ _ -> parseCFor cstmt
     CGoto label _ ->
         addEntry label IdLabel gl
     CReturn (Just expr) _ ->
         parseExpr gl ll expr IdRef
     _ -> gl
     where
-        mParseExpr gl ll mexpr = case mexpr of
-            Nothing -> Just gl
-            Just expr -> Just (parseExpr gl ll expr IdRef)
+        mParseExpr gl' ll' mexpr = case mexpr of
+            Nothing -> Just gl'
+            Just expr -> Just (parseExpr gl' ll' expr IdRef)
         parseCFor (CFor (Left mexpr1) (mexpr2) (mexpr3) stmt _) =
              case mParseExpr gl ll mexpr1 >>= \gl1 ->
-                  (mParseExpr gl1 ll) mexpr1 of
+                  (mParseExpr gl1 ll) mexpr2 >>= \gl2 ->
+                  (mParseExpr gl2 ll) mexpr3 of
                 Nothing -> gl
                 Just gl3 -> parseStmt gl3 ll stmt
         parseCFor (CFor _ _ _ _ _) = gl
+        parseCFor _ = gl
 
 -- C code compound, gl is global symbol DB, ll is local symbol DB
 -- Updates to a local symbol in a compound is discarded when the compound
 -- is parsed
 parseCompound :: IdDB -> IdDB -> [Ident] -> [CCompoundBlockItem a]
     -> IdDB
-parseCompound gl ll labels [] = gl -- end of parsing, ll is discarded
+parseCompound gl _ _ [] = gl -- end of parsing, ll is discarded
 parseCompound gl ll labels (blockItem:xs) = case blockItem of
     CBlockStmt stmt -> -- Stmt won't introduce new symbols
         let gl' = parseStmt gl ll stmt in
@@ -249,18 +254,21 @@ parseFunDeclr ll (CFunDeclr (Right (cDecls, _)) _ _) =
     forEachCDecl rl [] = rl
     forEachCDecl rl (cDecl:xs) =
         let (new_rl, _) = (parseDecl rl Map.empty cDecl) in forEachCDecl new_rl xs
+parseFunDeclr ll _ = ll
 
 -- Function definitions
 parseDef :: IdDB -> (CFunctionDef a) -> IdDB
-parseDef gl (CFunDef cType cDeclr _ cCompound _) = case cDeclr of
+parseDef gl (CFunDef _ cDeclr _ cCompound _) = case cDeclr of
     (CDeclr (Just ident) [cFunDeclr] _ _ _) ->
         let gl' = addEntry ident IdDecl gl in -- add function name to global list
         let ll = parseFunDeclr Map.empty cFunDeclr in -- add function arguments to local list
         case cCompound of
             (CCompound labels items _) ->
                 parseCompound gl' ll labels items
+            _ -> gl'
+    _ -> gl
 
---parseTranslUnit ::
+parseTranslUnit :: IdDB -> [CExternalDeclaration a] -> IdDB
 parseTranslUnit gl [] = gl
 parseTranslUnit gl (x:xs) = case x of
     CDeclExt decl -> let (dl, _) = (parseDecl gl Map.empty decl) in parseTranslUnit dl xs
@@ -321,11 +329,11 @@ filesToStreamList fs = sequence $ map (\f -> do
 -- Credit: https://stackoverflow.com/questions/19117922/parallel-folding-in-haskell/19119503
 pfold :: (a -> a -> a) -> [a] -> a
 pfold _ [x] = x
-pfold mappend xs  = (ys `par` zs) `pseq` (ys `mappend` zs) where
+pfold mappend' xs  = (ys `par` zs) `pseq` (ys `mappend'` zs) where
     len = length xs
     (ys', zs') = splitAt (len `div` 2) xs
-    ys = pfold mappend ys'
-    zs = pfold mappend zs'
+    ys = pfold mappend' ys'
+    zs = pfold mappend' zs'
 
 main :: IO ()
 main = do
@@ -348,13 +356,13 @@ main = do
                     print $ Map.lookup "xxx" $ handleStreams contents
                 "-p" -> do
                     print $ Map.lookup "xxx" $ parHandleStreams contents
-                    -- error "-p"
+                _ -> usage
         else die $ ("File does not exists: " ++) $ show f
     doHandleStream :: (InputStream, FilePath) -> IdDB
     doHandleStream (s, f) = case parseC s $ initPos f of -- TODO: pass file nanme
         Right tu -> case tu of
             CTranslUnit l _ -> parseTranslUnit Map.empty l
-        Left err -> Map.singleton "???" [dummyEntry] -- XXX: debugging
+        Left _ -> Map.singleton "???" [dummyEntry] -- XXX: debugging
     handleStreams :: [(InputStream, FilePath)] -> IdDB
     handleStreams ss = foldl (Map.unionWith unionResult) Map.empty $
                             map doHandleStream ss
@@ -362,7 +370,7 @@ main = do
     parHandleStreams ss =
         pfold (Map.unionWith unionResult) $
             -- parMap rpar doHandleStream ss
-            withStrategy (parBuffer 500 rpar) . map doHandleStream $ ss
+            withStrategy (parListChunk 6 rpar) . map doHandleStream $ ss
     unionResult :: [IdEntry] -> [IdEntry] -> [IdEntry]
     unionResult new old = new ++ old
     excludeDot "." = True
