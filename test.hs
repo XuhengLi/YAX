@@ -1,30 +1,17 @@
 import Language.C
-import Language.C.Parser
-import Language.C.Data.InputStream
-import Language.C.Data.Position
-import Language.C.Data.Name
-import Language.C.Pretty
-import Language.C.Syntax.AST
-import Language.C.Data.Ident
 import Language.C.System.GCC
 
-import System.IO
 import System.Environment
 import System.Directory
 import System.Exit
-import Data.List
 import qualified Data.Map.Strict as Map
 
 import Control.Monad
-import System.Directory
 import System.FilePath
 import System.Posix.Files
 
 import Control.Parallel
 import Control.Parallel.Strategies
-import Control.DeepSeq
-
-import Data.Map.Internal.Debug
 
 data EntryType = IdDecl | IdRef | IdCall | IdLabel | IdLocal deriving (Eq, Show)
 -- Not meaningful, just in case of sorting for searching
@@ -54,7 +41,6 @@ dummyEntry = ("", 0, 0, IdLocal)
 
 identToEntry :: Ident -> EntryType -> IdEntry
 identToEntry ident entry_type =
-    -- let id_name = (identToString ident) in
     let id_file = case fileOfNode ident of
                     Nothing -> ""
                     Just p -> p in
@@ -88,7 +74,7 @@ addEntry ident t gl =
 parseDeclList :: IdDB -> IdDB -> [(Maybe (CDeclarator a0), b0, c0)] ->
     (IdDB, IdDB)
 parseDeclList gl ll [] = (gl, ll)
-parseDeclList gl ll ((cDeclr, cInit, cExp):xs) = case cDeclr of
+parseDeclList gl ll ((cDeclr, _, _):xs) = case cDeclr of
     Nothing -> (gl, ll)
     Just (CDeclr (Just ident) _ _ _ _) ->
         case null ll of
@@ -104,7 +90,7 @@ parseCSU gl ll (CStruct _ mident mdecl _ _) = case mident of
         case mdecl of
             Just declL -> (parseStructDeclList gl' declL, ll)
             _ -> (gl', ll)
-    _ -> (gl, ll) -- TODO: this needs to be fixed as anoymous struct can have fields
+    _ -> (gl, ll)
     where
         -- struct fields are always indexed
         parseStructDeclList gl' [] = gl'
@@ -125,7 +111,6 @@ parseCType gl ll (cType:_) declList = case cType of
     _ -> parseDeclList gl ll declList
 
 --parseDecl :: CDeclaration a -> IdEntry
--- parseDecl gl (CDecl cTypes [] info) = gl -- void function arguments
 parseDecl :: IdDB -> IdDB -> (CDeclaration a) ->
     (IdDB, IdDB)
 parseDecl gl ll (CDecl cTypeList declrList _) =
@@ -240,7 +225,7 @@ parseCompound gl ll labels (blockItem:xs) = case blockItem of
     CBlockStmt stmt -> -- Stmt won't introduce new symbols
         let gl' = parseStmt gl ll stmt in
         parseCompound gl' ll labels xs
-    CBlockDecl decl -> -- TODO: this needs to fix as decl can refer to global symbols
+    CBlockDecl decl ->
         let (gl', ll') = parseDecl gl ll decl in
         parseCompound gl' ll' labels xs
     CNestedFunDef (_) -> gl -- GNU C nested function is not supported
@@ -275,14 +260,6 @@ parseTranslUnit gl (x:xs) = case x of
     CFDefExt def -> let dl = parseDef gl def in parseTranslUnit dl xs
     _ -> gl
 
-readHello f = do
-    source <- readInputStream f
-    case parseC source $ initPos f of
-        Right tu ->
-            case tu of
-                CTranslUnit l _ -> mapM_ print $ parseTranslUnit Map.empty l
-        Left err -> print err
-
 parseAST :: CTranslationUnit a -> IdDB
 parseAST (CTranslUnit l _) = parseTranslUnit Map.empty l
 
@@ -291,12 +268,6 @@ readWithPrep input_file = do
     ast <- errorOnLeftM "Parse Error" $
         parseCFile (newGCC "gcc") Nothing [""] input_file
     mapM_ print $ parseAST ast
-
-readWithPrep' :: String -> IO IdDB
-readWithPrep' input_file = do
-    ast <- errorOnLeftM "Parse Error" $
-        parseCFile (newGCC "gcc") Nothing [""] input_file
-    return $ parseAST ast
 
 errorOnLeft :: (Show a) => String -> (Either a b) -> IO b
 errorOnLeft msg = either (error . ((msg ++ ": ")++).show) return
@@ -359,7 +330,7 @@ main = do
                 _ -> usage
         else die $ ("File does not exists: " ++) $ show f
     doHandleStream :: (InputStream, FilePath) -> IdDB
-    doHandleStream (s, f) = case parseC s $ initPos f of -- TODO: pass file nanme
+    doHandleStream (s, f) = case parseC s $ initPos f of
         Right tu -> case tu of
             CTranslUnit l _ -> parseTranslUnit Map.empty l
         Left _ -> Map.singleton "???" [dummyEntry] -- XXX: debugging
@@ -369,37 +340,12 @@ main = do
     parHandleStreams :: [(InputStream, FilePath)] -> IdDB
     parHandleStreams ss =
         pfold (Map.unionWith unionResult) $
-            -- parMap rpar doHandleStream ss
-            withStrategy (parListChunk 6 rpar) . map doHandleStream $ ss
+            withStrategy (parList rpar) . map doHandleStream $ ss
     unionResult :: [IdEntry] -> [IdEntry] -> [IdEntry]
     unionResult new old = new ++ old
     excludeDot "." = True
     excludeDot ".." = True
     excludeDot _ = False
-    -- XXX: Discard
-    -- parHandleFiles :: [String] -> IO IdDB
-    -- parHandleFiles fs = do
-    --     let (as, bs) = splitAt (length fs `div` 2) fs in
-    --         runEval $ do
-    --             as' <- rpar (force map readWithPrep' as)
-    --             bs' <- rpar (force map readWithPrep' bs)
-    --             rseq as'
-    --             rseq bs'
-    --             return (combineIOList as' bs')
-    --             -- let mres = runEval (parMap readWithPrep' fs) in
-    --             --     do
-    --             --         res <- sequence mres
-    --             --         return $ concat res
-    -- combineIOList :: [IO IdDB] -> [IO IdDB] -> IO IdDB
-    -- combineIOList as bs = do
-    --     as' <- sequence as
-    --     bs' <- sequence bs
-    --     return $ (concat as') ++ (concat bs')
-    -- handleFiles :: [String] -> IO ()
-    -- handleFiles fs = do
-    --     rs <- sequence $ map readWithPrep' fs
-    --     mapM_ print rs
-    --     return ()
 
 -- Testing facilities
 
